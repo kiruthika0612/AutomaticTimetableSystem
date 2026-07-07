@@ -1,0 +1,43 @@
+AUTOMATIC TIMETABLE MANAGEMENT SYSTEM
+
+How to open the application:
+
+1. Open this project folder.
+2. Double-click Run_Timetable_App.vbs
+
+If Run_Timetable_App.vbs does not open:
+
+1. Double-click Run_Timetable_App.bat
+2. If it says Tcl/Tk was not found, install Tcl/Tk on the computer.
+
+Default login:
+
+Username: admin
+Password: admin123
+
+Do not delete these folders:
+
+- modules
+- database
+- images
+- icons
+
+The database is stored in:
+
+database/college.db
+
+Updates:
+
+If this folder was sent as a ZIP file, changes made by the developer will NOT update automatically.
+
+For automatic updates, keep this project in one shared folder such as:
+
+- OneDrive shared folder
+- Google Drive shared folder
+- College network shared drive
+
+Staff should always open the app from that shared folder using:
+
+Run_Timetable_App.vbs
+
+After the developer changes the app, staff should close and reopen the app.
