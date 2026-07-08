@@ -1,0 +1,8 @@
+*.tcl text eol=lf
+*.txt text eol=lf
+*.bat text eol=crlf
+*.vbs text eol=crlf
+
+*.db binary
+*.sqbpro binary
+*.png binary

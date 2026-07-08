@@ -2,13 +2,16 @@
 # Break times stored per year; UI allows selecting year to view/add.
 
 proc openBreaktimeManagement {} {
+    global editingBreakId
+    set editingBreakId ""
+
     if {[winfo exists .breaktime]} {
         raise .breaktime
         return
     }
     toplevel .breaktime
     wm title .breaktime "Break Time Management"
-    wm geometry .breaktime "520x360"
+    wm geometry .breaktime "620x420"
     .breaktime configure -bg white
 
     label .breaktime.title -text "BREAK TIME MANAGEMENT" -font {Arial 16 bold} -bg "#1565C0" -fg white
@@ -48,47 +51,65 @@ proc openBreaktimeManagement {} {
     pack .breaktime.add -in .breaktime.actions -side left -padx 6
     button .breaktime.clear -text "Clear" -width 10 -command {clearBreaktimeForm}
     pack .breaktime.clear -in .breaktime.actions -side left -padx 6
+    button .breaktime.edit -text "Edit Selected" -width 13 -command {editSelectedBreak}
+    pack .breaktime.edit -in .breaktime.actions -side left -padx 6
+    button .breaktime.update -text "Update Selected" -width 15 -command {updateSelectedBreak}
+    pack .breaktime.update -in .breaktime.actions -side left -padx 6
+    button .breaktime.refresh -text "Refresh" -width 10 -command {refreshBreaktimeList}
+    pack .breaktime.refresh -in .breaktime.actions -side left -padx 6
+    button .breaktime.delete -text "Delete Selected" -width 14 -command {deleteSelectedBreak}
+    pack .breaktime.delete -in .breaktime.actions -side left -padx 6
     button .breaktime.close -text "Close" -command {destroy .breaktime}
     pack .breaktime.close -in .breaktime.actions -side left -padx 6
 
-    # List and filter
     frame .breaktime.listf -bg white
     pack .breaktime.listf -fill both -expand 1 -padx 8 -pady 8
     listbox .breaktime.list -width 70 -height 8
     pack .breaktime.list -in .breaktime.listf -fill both -expand 1
-    frame .breaktime.listctrl -bg white
-    pack .breaktime.listctrl -pady 6
-    button .breaktime.refresh -text "Refresh List" -command {refreshBreaktimeList}
-    pack .breaktime.refresh -in .breaktime.listctrl -side left -padx 6
-    button .breaktime.delete -text "Delete Selected" -command {deleteSelectedBreak} 
-    pack .breaktime.delete -in .breaktime.listctrl -side left -padx 6
 
     applyThemeToWindow .breaktime
     refreshBreaktimeList
 }
 
 proc clearBreaktimeForm {} {
+    global editingBreakId
+    set editingBreakId ""
     .breaktime.form.e1 delete 0 end
     .breaktime.form.e2 delete 0 end
     .breaktime.form.e3 delete 0 end
 }
 
-proc addBreaktime {} {
-    global db
-    set year [.breaktime.form.year get]
-    set name [.breaktime.form.e1 get]
-    set start [.breaktime.form.e2 get]
-    set end   [.breaktime.form.e3 get]
+proc readBreaktimeForm {} {
+    set year [string trim [.breaktime.form.year get]]
+    set name [string trim [.breaktime.form.e1 get]]
+    set start [string trim [.breaktime.form.e2 get]]
+    set end   [string trim [.breaktime.form.e3 get]]
 
     if {$year eq "" || $name eq ""} {
         tk_messageBox -title "Validation" -message "Year and Break name are required." -icon warning
-        return
+        return "__INVALID__"
     }
+
+    set start [validateBreakClockTime $start "Start Time"]
+    if {$start eq ""} { return "__INVALID__" }
+    set end [validateBreakClockTime $end "End Time"]
+    if {$end eq ""} { return "__INVALID__" }
 
     set escYear [string map {"'" "''"} $year]
     set escName [string map {"'" "''"} $name]
     set escStart [string map {"'" "''"} $start]
     set escEnd [string map {"'" "''"} $end]
+
+    return [list $escYear $escName $escStart $escEnd $year]
+}
+
+proc addBreaktime {} {
+    global db
+    set values [readBreaktimeForm]
+    if {$values eq "__INVALID__"} {
+        return
+    }
+    lassign $values escYear escName escStart escEnd year
 
     set sql "INSERT INTO breaktimes (year, break_name, start_time, end_time) VALUES ('$escYear','$escName','$escStart','$escEnd')"
     if {[catch {db eval $sql} err]} {
@@ -100,47 +121,121 @@ proc addBreaktime {} {
     }
 }
 
+proc selectedBreakId {} {
+    set selIndex [.breaktime.list curselection]
+    if {$selIndex eq ""} {
+        return ""
+    }
+    set line [.breaktime.list get $selIndex]
+    if {[regexp {^([0-9]+) \|} $line -> bid]} {
+        return $bid
+    }
+    return ""
+}
+
+proc editSelectedBreak {} {
+    global db editingBreakId
+    set breakId [selectedBreakId]
+    if {$breakId eq ""} {
+        tk_messageBox -title "Edit" -message "Select a break row." -icon info
+        return
+    }
+
+    set found 0
+    db eval "SELECT year, break_name, start_time, end_time FROM breaktimes WHERE break_id = $breakId" row {
+        set found 1
+        clearBreaktimeForm
+        set editingBreakId $breakId
+        .breaktime.form.year set $row(year)
+        .breaktime.form.e1 insert 0 $row(break_name)
+        .breaktime.form.e2 insert 0 $row(start_time)
+        .breaktime.form.e3 insert 0 $row(end_time)
+    }
+    if {!$found} {
+        tk_messageBox -title "Edit" -message "Selected break was not found." -icon warning
+    }
+}
+
+proc updateSelectedBreak {} {
+    global db editingBreakId
+    if {$editingBreakId eq ""} {
+        set editingBreakId [selectedBreakId]
+    }
+    if {$editingBreakId eq ""} {
+        tk_messageBox -title "Update" -message "Select a break row, then click Edit Selected." -icon info
+        return
+    }
+
+    set values [readBreaktimeForm]
+    if {$values eq "__INVALID__"} {
+        return
+    }
+    lassign $values escYear escName escStart escEnd year
+
+    set sql "UPDATE breaktimes SET year='$escYear', break_name='$escName', start_time='$escStart', end_time='$escEnd' WHERE break_id = $editingBreakId"
+    if {[catch {db eval $sql} err]} {
+        tk_messageBox -title "DB Error" -message "Could not update break:\n$err" -icon error
+        return
+    }
+
+    tk_messageBox -title "Success" -message "Break updated." -icon info
+    clearBreaktimeForm
+    refreshBreaktimeList
+}
+
+proc validateBreakClockTime {timeValue label} {
+    set timeValue [string trim $timeValue]
+    if {![regexp {^([0-9][0-9]):([0-9][0-9])$} $timeValue -> hour minute]} {
+        tk_messageBox -title "Validation" -message "$label must use 24-hour HH:MM format. Example: 13:15, not 1:15." -icon warning
+        return ""
+    }
+
+    scan $hour %d hour
+    scan $minute %d minute
+    if {$hour < 0 || $hour > 23 || $minute < 0 || $minute > 59} {
+        tk_messageBox -title "Validation" -message "$label must be a valid 24-hour time." -icon warning
+        return ""
+    }
+
+    return [format "%02d:%02d" $hour $minute]
+}
+
 proc refreshBreaktimeList {} {
     global db
     .breaktime.list delete 0 end
     set year [.breaktime.form.year get]
     if {$year eq ""} {
         set sql {SELECT break_id, year, break_name, start_time, end_time FROM breaktimes ORDER BY year, start_time}
-        if {[catch {db eval $sql} err]} {
+        if {[catch {
+            db eval $sql row {
+                .breaktime.list insert end "[format {%d | %s | %s | %s - %s} $row(break_id) $row(year) $row(break_name) $row(start_time) $row(end_time)]"
+            }
+        } err]} {
             .breaktime.list insert end "Error reading breaktimes: $err"
             return
-        }
-        db eval $sql {
-            .breaktime.list insert end "[format {%d | %s | %s | %s - %s} $row(break_id) $row(year) $row(break_name) $row(start_time) $row(end_time)]"
         }
     } else {
         set escYear [string map {"'" "''"} $year]
         set sql "SELECT break_id, year, break_name, start_time, end_time FROM breaktimes WHERE year = '$escYear' ORDER BY start_time"
-        if {[catch {db eval $sql} err]} {
+        if {[catch {
+            db eval $sql row {
+                .breaktime.list insert end "[format {%d | %s | %s | %s - %s} $row(break_id) $row(year) $row(break_name) $row(start_time) $row(end_time)]"
+            }
+        } err]} {
             .breaktime.list insert end "Error reading breaktimes: $err"
             return
-        }
-        db eval $sql {
-            .breaktime.list insert end "[format {%d | %s | %s | %s - %s} $row(break_id) $row(year) $row(break_name) $row(start_time) $row(end_time)]"
         }
     }
 }
 
 proc deleteSelectedBreak {} {
     global db
-    set selIndex [.breaktime.list curselection]
-    if {$selIndex eq ""} {
+    set bid [selectedBreakId]
+    if {$bid eq ""} {
         tk_messageBox -title "Delete" -message "Select a break to delete." -icon info
         return
     }
-    set line [.breaktime.list get $selIndex]
-    # line format: id | year | name | start - end
-    regexp {^([0-9]+) \|} $line -> bid
-    if {$bid eq ""} {
-        tk_messageBox -title "Delete" -message "Could not parse selection." -icon error
-        return
-    }
-    if {![tk_messageBox -type yesno -icon question -title "Confirm" -message "Delete break ID $bid ?"]} { return }
+    if {[tk_messageBox -type yesno -icon question -title "Confirm" -message "Delete break ID $bid ?"] ne "yes"} { return }
     if {[catch {db eval "DELETE FROM breaktimes WHERE break_id = $bid"} err]} {
         tk_messageBox -title "DB Error" -message "Delete failed:\n$err" -icon error
     } else {

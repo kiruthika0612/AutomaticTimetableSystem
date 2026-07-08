@@ -1,4 +1,7 @@
 proc openLeaveManagement {} {
+    global editingLeaveId
+    set editingLeaveId ""
+
     if {[winfo exists .leave]} {
         raise .leave
         return
@@ -34,6 +37,10 @@ proc openLeaveManagement {} {
     pack .leave.actions -pady 8
     button .leave.add -text "Add Leave" -width 12 -command {addLeave}
     pack .leave.add -in .leave.actions -side left -padx 5
+    button .leave.edit -text "Edit Selected" -width 13 -command {editSelectedLeave}
+    pack .leave.edit -in .leave.actions -side left -padx 5
+    button .leave.update -text "Update Selected" -width 15 -command {updateSelectedLeave}
+    pack .leave.update -in .leave.actions -side left -padx 5
     button .leave.refresh -text "Refresh" -width 10 -command {refreshLeaveList}
     pack .leave.refresh -in .leave.actions -side left -padx 5
     button .leave.delete -text "Delete Selected" -width 14 -command {deleteSelectedLeave}
@@ -56,25 +63,102 @@ proc loadFacultyOptions {} {
     return $options
 }
 
-proc addLeave {} {
-    global db
-    set faculty [.leave.form.faculty get]
-    set date [.leave.form.date get]
-    set reason [.leave.form.reason get]
+proc clearLeaveForm {} {
+    global editingLeaveId
+    set editingLeaveId ""
+    .leave.form.faculty set ""
+    .leave.form.date delete 0 end
+    .leave.form.reason delete 0 end
+}
+
+proc readLeaveForm {} {
+    set faculty [string trim [.leave.form.faculty get]]
+    set date [string trim [.leave.form.date get]]
+    set reason [string trim [.leave.form.reason get]]
 
     if {$faculty eq "" || $date eq ""} {
         tk_messageBox -title "Validation" -message "Faculty and date are required." -icon warning
-        return
+        return "__INVALID__"
     }
 
-    regexp {^([0-9]+) \| (.+)$} $faculty -> facultyId facultyName
+    if {![regexp {^([0-9]+) \| (.+)$} $faculty -> facultyId facultyName]} {
+        tk_messageBox -title "Validation" -message "Select a valid faculty row." -icon warning
+        return "__INVALID__"
+    }
+
     set escName [string map {"'" "''"} $facultyName]
     set escDate [string map {"'" "''"} $date]
     set escReason [string map {"'" "''"} $reason]
 
+    return [list $facultyId $escName $escDate $escReason]
+}
+
+proc addLeave {} {
+    global db
+    set values [readLeaveForm]
+    if {$values eq "__INVALID__"} {
+        return
+    }
+    lassign $values facultyId escName escDate escReason
+
     db eval "INSERT INTO leaves(faculty_id, faculty_name, leave_date, reason) VALUES($facultyId, '$escName', '$escDate', '$escReason')"
-    .leave.form.date delete 0 end
-    .leave.form.reason delete 0 end
+    clearLeaveForm
+    refreshLeaveList
+}
+
+proc selectedLeaveId {} {
+    set sel [.leave.list curselection]
+    if {$sel eq ""} {
+        return ""
+    }
+    set line [.leave.list get $sel]
+    if {[regexp {^([0-9]+) \|} $line -> leaveId]} {
+        return $leaveId
+    }
+    return ""
+}
+
+proc editSelectedLeave {} {
+    global db editingLeaveId
+    set leaveId [selectedLeaveId]
+    if {$leaveId eq ""} {
+        tk_messageBox -title "Edit" -message "Select a leave row." -icon info
+        return
+    }
+
+    .leave.form.faculty configure -values [loadFacultyOptions]
+    set found 0
+    db eval "SELECT faculty_id, faculty_name, leave_date, reason FROM leaves WHERE leave_id = $leaveId" row {
+        set found 1
+        clearLeaveForm
+        set editingLeaveId $leaveId
+        .leave.form.faculty set "$row(faculty_id) | $row(faculty_name)"
+        .leave.form.date insert 0 $row(leave_date)
+        .leave.form.reason insert 0 $row(reason)
+    }
+    if {!$found} {
+        tk_messageBox -title "Edit" -message "Selected leave was not found." -icon warning
+    }
+}
+
+proc updateSelectedLeave {} {
+    global db editingLeaveId
+    if {$editingLeaveId eq ""} {
+        set editingLeaveId [selectedLeaveId]
+    }
+    if {$editingLeaveId eq ""} {
+        tk_messageBox -title "Update" -message "Select a leave row, then click Edit Selected." -icon info
+        return
+    }
+
+    set values [readLeaveForm]
+    if {$values eq "__INVALID__"} {
+        return
+    }
+    lassign $values facultyId escName escDate escReason
+
+    db eval "UPDATE leaves SET faculty_id=$facultyId, faculty_name='$escName', leave_date='$escDate', reason='$escReason' WHERE leave_id = $editingLeaveId"
+    clearLeaveForm
     refreshLeaveList
 }
 
@@ -88,13 +172,11 @@ proc refreshLeaveList {} {
 
 proc deleteSelectedLeave {} {
     global db
-    set sel [.leave.list curselection]
-    if {$sel eq ""} {
+    set leaveId [selectedLeaveId]
+    if {$leaveId eq ""} {
         tk_messageBox -title "Delete" -message "Select a leave row." -icon info
         return
     }
-    set line [.leave.list get $sel]
-    regexp {^([0-9]+) \|} $line -> leaveId
     db eval "DELETE FROM leaves WHERE leave_id = $leaveId"
     refreshLeaveList
 }

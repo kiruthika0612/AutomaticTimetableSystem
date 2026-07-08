@@ -42,6 +42,8 @@ proc openSettings {} {
 
     button .settings.save -text "Save Period" -width 14 -command {savePeriod}
     pack .settings.save -in .settings.actions -side left -padx 5
+    button .settings.edit -text "Edit Selected" -width 13 -command {loadSelectedPeriod}
+    pack .settings.edit -in .settings.actions -side left -padx 5
     button .settings.delete -text "Delete Selected" -width 14 -command {deleteSelectedPeriod}
     pack .settings.delete -in .settings.actions -side left -padx 5
     button .settings.reset -text "Reset 9 Periods" -width 14 -command {resetDefaultPeriods}

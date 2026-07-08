@@ -1,4 +1,6 @@
 proc openTimetableGenerator {} {
+    global currentTimetableId
+    set currentTimetableId ""
     ensureTimetableTables
     if {[winfo exists .timetable]} {
         raise .timetable
@@ -47,18 +49,25 @@ proc openTimetableGenerator {} {
 
     button .timetable.generate -text "Generate" -width 14 -command {generateTimetable}
     pack .timetable.generate -in .timetable.actions -side left -padx 8
+    button .timetable.delete -text "Delete Timetable" -width 16 -command {deleteCurrentTimetable}
+    pack .timetable.delete -in .timetable.actions -side left -padx 8
     button .timetable.close -text "Close" -command {destroy .timetable}
     pack .timetable.close -in .timetable.actions -side left -padx 8
 
     frame .timetable.result -bg white
     pack .timetable.result -fill both -expand 1 -padx 10 -pady 8
 
-    text .timetable.result.txt -width 110 -height 16 -wrap none
-    scrollbar .timetable.result.ys -orient vertical -command ".timetable.result.txt yview"
-    scrollbar .timetable.result.xs -orient horizontal -command ".timetable.result.txt xview"
-    .timetable.result.txt configure -yscrollcommand ".timetable.result.ys set" -xscrollcommand ".timetable.result.xs set"
+    canvas .timetable.result.canvas -bg white -highlightthickness 0
+    frame .timetable.result.table -bg white
+    scrollbar .timetable.result.ys -orient vertical -command ".timetable.result.canvas yview"
+    scrollbar .timetable.result.xs -orient horizontal -command ".timetable.result.canvas xview"
+    .timetable.result.canvas configure -yscrollcommand ".timetable.result.ys set" -xscrollcommand ".timetable.result.xs set"
+    .timetable.result.canvas create window 0 0 -anchor nw -window .timetable.result.table -tags table
+    bind .timetable.result.table <Configure> {
+        .timetable.result.canvas configure -scrollregion [.timetable.result.canvas bbox all]
+    }
 
-    grid .timetable.result.txt -row 0 -column 0 -sticky nsew
+    grid .timetable.result.canvas -row 0 -column 0 -sticky nsew
     grid .timetable.result.ys -row 0 -column 1 -sticky ns
     grid .timetable.result.xs -row 1 -column 0 -sticky ew
     grid rowconfigure .timetable.result 0 -weight 1
@@ -68,7 +77,7 @@ proc openTimetableGenerator {} {
 }
 
 proc generateTimetable {} {
-    global db
+    global db currentTimetableId
     ensureTimetableTables
 
     set sem [.timetable.form.e1 get]
@@ -126,53 +135,120 @@ proc generateTimetable {} {
         tk_messageBox -title "Missing Data" -message "No period timings found for $year. Open Settings and add periods." -icon warning
         return
     }
+    set totalSlots [expr {[llength $days] * [llength $periods]}]
 
     set theoryTodo {}
     set labTodo {}
+    set baseLabSlots 0
+    array unset facultyBaseCount
+    array unset facultyLimit
+    array unset facultyExtraSources
     foreach subject $subjects {
-        lassign $subject subjectName subjectCode department credits facultyName subjectType labPeriods
+        lassign $subject subjectName subjectCode department credits facultyName subjectType labPeriods facultyId facultyHours
         if {$credits eq "" || ![string is integer -strict $credits] || $credits < 1} {
             set credits 3
         }
+        if {$labPeriods eq "" || ![string is integer -strict $labPeriods] || $labPeriods < 1} {
+            set labPeriods 3
+        }
+
+        set facultyKey $facultyId
+        if {$facultyKey eq ""} {
+            set facultyKey $facultyName
+        }
+        if {![info exists facultyBaseCount($facultyKey)]} {
+            set facultyBaseCount($facultyKey) 0
+        }
+        if {$facultyHours ne "" && [string is integer -strict $facultyHours] && $facultyHours > 0} {
+            set facultyLimit($facultyKey) $facultyHours
+        }
+
         if {[string equal -nocase $subjectType "Lab"]} {
-            if {$labPeriods eq "" || ![string is integer -strict $labPeriods] || $labPeriods < 1} {
-                set labPeriods 3
-            }
-            lappend labTodo [list $subjectName $subjectCode $department $credits $facultyName "Lab" $labPeriods]
-        } else {
+            lappend labTodo [list $subjectName $subjectCode $department $credits $facultyName "Lab" $labPeriods $facultyKey]
+            incr baseLabSlots $labPeriods
+            incr facultyBaseCount($facultyKey) $labPeriods
+        } elseif {[string equal -nocase $subjectType "Blended"]} {
+            set theoryItem [list $subjectName $subjectCode $department $credits $facultyName "Theory" 1 $facultyKey]
+            lappend facultyExtraSources($facultyKey) $theoryItem
             for {set i 0} {$i < $credits} {incr i} {
-                lappend theoryTodo [list $subjectName $subjectCode $department $credits $facultyName "Theory" 1]
+                lappend theoryTodo $theoryItem
+                incr facultyBaseCount($facultyKey)
+            }
+            lappend labTodo [list "$subjectName Lab" $subjectCode $department $credits $facultyName "Lab" $labPeriods $facultyKey]
+            incr baseLabSlots $labPeriods
+            incr facultyBaseCount($facultyKey) $labPeriods
+        } else {
+            set theoryItem [list $subjectName $subjectCode $department $credits $facultyName "Theory" 1 $facultyKey]
+            lappend facultyExtraSources($facultyKey) $theoryItem
+            for {set i 0} {$i < $credits} {incr i} {
+                lappend theoryTodo $theoryItem
+                incr facultyBaseCount($facultyKey)
             }
         }
     }
 
+    set maxTheorySlots [expr {$totalSlots - $baseLabSlots}]
+    array unset facultySourceIndex
+    foreach facultyKey [array names facultyLimit] {
+        set facultySourceIndex($facultyKey) 0
+    }
+    set addedAllotted 1
+    while {$addedAllotted && [llength $theoryTodo] < $maxTheorySlots} {
+        set addedAllotted 0
+        foreach facultyKey [lsort -dictionary [array names facultyLimit]] {
+            if {[llength $theoryTodo] >= $maxTheorySlots} {
+                break
+            }
+            if {![info exists facultyExtraSources($facultyKey)] || $facultyBaseCount($facultyKey) >= $facultyLimit($facultyKey)} {
+                continue
+            }
+            set sources $facultyExtraSources($facultyKey)
+            lappend theoryTodo [lindex $sources [expr {$facultySourceIndex($facultyKey) % [llength $sources]}]]
+            incr facultyBaseCount($facultyKey)
+            incr facultySourceIndex($facultyKey)
+            set addedAllotted 1
+        }
+    }
+
+    set allottedShortfall 0
+    foreach facultyKey [array names facultyLimit] {
+        if {$facultyBaseCount($facultyKey) < $facultyLimit($facultyKey)} {
+            incr allottedShortfall [expr {$facultyLimit($facultyKey) - $facultyBaseCount($facultyKey)}]
+        }
+    }
+    set theoryTodo [spreadTheorySubjects $theoryTodo]
+
     set classroomIndex 0
-    set slotIndex 0
     set inserted 0
     set skippedLabs 0
     set requiredSlots [llength $theoryTodo]
-    set totalSlots [expr {[llength $days] * [llength $periods]}]
+    array set occupied {}
+    set preferredLabDay 0
 
     foreach item $labTodo {
         lassign $item subjectName subjectCode department credits facultyName subjectType labPeriods
         incr requiredSlots $labPeriods
-        set placed [placeLabBlock $timetableId $days $periods $slotIndex $labPeriods $subjectName $subjectCode $facultyName $department $section [lindex $classrooms [expr {$classroomIndex % [llength $classrooms]}]]]
+        set placed [placeLabBlock $timetableId $days $periods $preferredLabDay $labPeriods $subjectName $subjectCode $facultyName $department $section [lindex $classrooms [expr {$classroomIndex % [llength $classrooms]}]] occupied]
         if {$placed < 0} {
             incr skippedLabs
             continue
         }
-        set slotIndex $placed
+        set preferredLabDay [expr {($placed + 1) % [llength $days]}]
         incr classroomIndex
         incr inserted $labPeriods
     }
 
+    set slotOrder [balancedTimetableSlotOrder $days $periods]
+    set slotOrderIndex 0
     foreach item $theoryTodo {
-        if {$slotIndex >= $totalSlots} {
+        set nextSlot [nextFreeTimetableSlot $slotOrder slotOrderIndex occupied]
+        if {[llength $nextSlot] == 0} {
             break
         }
 
-        set day [lindex $days [expr {$slotIndex / [llength $periods]}]]
-        set periodData [lindex $periods [expr {$slotIndex % [llength $periods]}]]
+        lassign $nextSlot dayIndex periodIndex
+        set day [lindex $days $dayIndex]
+        set periodData [lindex $periods $periodIndex]
         lassign $periodData periodNumber startTime endTime
 
         set room [lindex $classrooms [expr {$classroomIndex % [llength $classrooms]}]]
@@ -186,22 +262,107 @@ proc generateTimetable {} {
         }
 
         insertTimetableSlot $timetableId $day $periodNumber "Class" $startTime $subjectName $facultyName $department $section $room $remarks
+        set occupied($dayIndex,$periodIndex) 1
         incr classroomIndex
-        incr slotIndex
         incr inserted
     }
 
     insertBreakSlots $timetableId $year $days
+    set currentTimetableId $timetableId
     showGeneratedTimetable $timetableId
 
-    set message "Generated $inserted class slots for $dept section $section, semester $sem, $year."
+    set message "Generated $inserted of $requiredSlots required class/lab slots for $dept section $section, semester $sem, $year."
     if {$requiredSlots > $totalSlots} {
         append message "\nSome subject periods did not fit because only $totalSlots weekly slots are available."
     }
     if {$skippedLabs > 0} {
         append message "\n$skippedLabs lab subject(s) could not fit into continuous lab periods."
     }
+    if {$allottedShortfall > 0} {
+        append message "\n$allottedShortfall allotted faculty hour(s) could not fit into the available timetable slots."
+    }
     tk_messageBox -title "Success" -message $message -icon info
+}
+
+proc spreadTheorySubjects {theoryItems} {
+    array unset grouped
+    set order {}
+    foreach item $theoryItems {
+        set subjectName [lindex $item 0]
+        set subjectCode [lindex $item 1]
+        set key "$subjectName|$subjectCode"
+        if {![info exists grouped($key)]} {
+            lappend order $key
+            set grouped($key) {}
+        }
+        lappend grouped($key) $item
+    }
+
+    set result {}
+    set added 1
+    while {$added} {
+        set added 0
+        foreach key $order {
+            if {[llength $grouped($key)] > 0} {
+                lappend result [lindex $grouped($key) 0]
+                set grouped($key) [lrange $grouped($key) 1 end]
+                set added 1
+            }
+        }
+    }
+
+    return $result
+}
+
+proc findTimetableToDelete {} {
+    global db currentTimetableId
+    if {[info exists currentTimetableId] && $currentTimetableId ne ""} {
+        return $currentTimetableId
+    }
+
+    set sem [string trim [.timetable.form.e1 get]]
+    set year [string trim [.timetable.form.year get]]
+    set dept [string trim [.timetable.form.dept get]]
+    set section [string trim [.timetable.form.section get]]
+    if {$section eq ""} {
+        set section "General"
+    }
+
+    if {$sem eq "" || $year eq "" || $dept eq "" || ![string is integer -strict $sem]} {
+        return ""
+    }
+
+    set timetableId ""
+    set sql "SELECT timetable_id FROM timetables WHERE semester = $sem AND year = [sqlQuote $year] AND department = [sqlQuote $dept] AND section = [sqlQuote $section] ORDER BY timetable_id DESC LIMIT 1"
+    db eval $sql result {
+        set timetableId $result(timetable_id)
+    }
+    return $timetableId
+}
+
+proc deleteCurrentTimetable {} {
+    global db currentTimetableId
+    set timetableId [findTimetableToDelete]
+    if {$timetableId eq ""} {
+        tk_messageBox -title "Delete" -message "Generate a timetable first, or select the same semester, year, department, and section to delete." -icon info
+        return
+    }
+
+    if {[tk_messageBox -type yesno -icon question -title "Confirm Delete" -message "Delete timetable ID $timetableId and all its slots?"] ne "yes"} {
+        return
+    }
+
+    if {[catch {
+        db eval "DELETE FROM timetable_slots WHERE timetable_id = $timetableId"
+        db eval "DELETE FROM timetables WHERE timetable_id = $timetableId"
+    } err]} {
+        tk_messageBox -title "Database Error" -message "Could not delete timetable:\n$err" -icon error
+        return
+    }
+
+    set currentTimetableId ""
+    clearTimetableResult
+    tk_messageBox -title "Deleted" -message "Timetable deleted successfully." -icon info
 }
 
 proc ensureTimetableTables {} {
@@ -270,8 +431,14 @@ proc sqlQuote {value} {
 proc loadTimetableDepartments {} {
     global db
     set departments {}
-    db eval {SELECT department_name FROM departments ORDER BY department_name} row {
-        lappend departments $row(department_name)
+    db eval {SELECT department_name, short_name FROM departments ORDER BY department_name} row {
+        set dept $row(department_name)
+        if {$row(short_name) ne ""} {
+            set dept $row(short_name)
+        }
+        if {[lsearch -exact $departments $dept] < 0} {
+            lappend departments $dept
+        }
     }
     db eval {SELECT DISTINCT department FROM subjects WHERE department IS NOT NULL AND trim(department) <> '' ORDER BY department} row {
         if {[lsearch -exact $departments $row(department)] < 0} {
@@ -291,36 +458,67 @@ proc loadTimetableDepartments {} {
     return $departments
 }
 
+proc departmentMatchSql {column dept} {
+    set quoted [sqlQuote $dept]
+    return "($column = $quoted OR $column IN (SELECT department_name FROM departments WHERE short_name = $quoted) OR $column IN (SELECT short_name FROM departments WHERE department_name = $quoted))"
+}
+
 proc loadTimetableSubjects {sem dept} {
     global db
     set subjects {}
-    set sql "SELECT s.subject_name, s.subject_code, s.department, s.credits, COALESCE(f.faculty_name, 'Not Assigned') AS faculty_name, COALESCE(s.subject_type, 'Theory') AS subject_type, COALESCE(s.lab_hours, 3) AS lab_hours FROM subjects s LEFT JOIN faculty f ON s.faculty_id = f.faculty_id WHERE s.semester = $sem AND s.department = [sqlQuote $dept] ORDER BY CASE COALESCE(s.subject_type, 'Theory') WHEN 'Lab' THEN 0 ELSE 1 END, s.subject_name"
+    set sql "SELECT s.subject_name, s.subject_code, s.department, s.credits, s.faculty_id, COALESCE(f.faculty_name, 'Not Assigned') AS faculty_name, COALESCE(f.hours_allotted, '') AS hours_allotted, COALESCE(s.subject_type, 'Theory') AS subject_type, COALESCE(s.lab_hours, 3) AS lab_hours FROM subjects s LEFT JOIN faculty f ON s.faculty_id = f.faculty_id WHERE s.semester = $sem AND [departmentMatchSql s.department $dept] ORDER BY CASE COALESCE(s.subject_type, 'Theory') WHEN 'Lab' THEN 0 ELSE 1 END, s.subject_name"
     db eval $sql row {
-        lappend subjects [list $row(subject_name) $row(subject_code) $row(department) $row(credits) $row(faculty_name) $row(subject_type) $row(lab_hours)]
+        lappend subjects [list $row(subject_name) $row(subject_code) $row(department) $row(credits) $row(faculty_name) $row(subject_type) $row(lab_hours) $row(faculty_id) $row(hours_allotted)]
     }
     return $subjects
 }
 
-proc placeLabBlock {timetableId days periods startSlot labPeriods subjectName subjectCode facultyName department section room} {
+proc balancedTimetableSlotOrder {days periods} {
+    set order {}
+    for {set dayIndex 0} {$dayIndex < [llength $days]} {incr dayIndex} {
+        for {set periodIndex 0} {$periodIndex < [llength $periods]} {incr periodIndex} {
+            lappend order [list $dayIndex $periodIndex]
+        }
+    }
+    return $order
+}
+
+proc nextFreeTimetableSlot {slotOrder slotOrderIndexVar occupiedVar} {
+    upvar $slotOrderIndexVar slotOrderIndex
+    upvar $occupiedVar occupied
+
+    while {$slotOrderIndex < [llength $slotOrder]} {
+        set slot [lindex $slotOrder $slotOrderIndex]
+        incr slotOrderIndex
+        lassign $slot dayIndex periodIndex
+        if {![info exists occupied($dayIndex,$periodIndex)]} {
+            return $slot
+        }
+    }
+
+    return {}
+}
+
+proc placeLabBlock {timetableId days periods preferredDay labPeriods subjectName subjectCode facultyName department section room occupiedVar} {
+    upvar $occupiedVar occupied
     set periodsPerDay [llength $periods]
-    set totalSlots [expr {[llength $days] * $periodsPerDay}]
-    set slot $startSlot
+    set dayCount [llength $days]
 
-    while {$slot < $totalSlots} {
-        set dayIndex [expr {$slot / $periodsPerDay}]
-        set periodIndex [expr {$slot % $periodsPerDay}]
-
-        if {[expr {$periodIndex + $labPeriods}] <= $periodsPerDay} {
-            set day [lindex $days $dayIndex]
+    for {set dayOffset 0} {$dayOffset < $dayCount} {incr dayOffset} {
+        set dayIndex [expr {($preferredDay + $dayOffset) % $dayCount}]
+        set day [lindex $days $dayIndex]
+        for {set periodIndex 0} {[expr {$periodIndex + $labPeriods}] <= $periodsPerDay} {incr periodIndex} {
             set canPlace 1
-            set block {}
             for {set i 0} {$i < $labPeriods} {incr i} {
-                set periodData [lindex $periods [expr {$periodIndex + $i}]]
-                lappend block $periodData
+                if {[info exists occupied($dayIndex,[expr {$periodIndex + $i}])]} {
+                    set canPlace 0
+                    break
+                }
             }
 
             if {$canPlace} {
-                foreach periodData $block {
+                for {set i 0} {$i < $labPeriods} {incr i} {
+                    set periodData [lindex $periods [expr {$periodIndex + $i}]]
                     lassign $periodData periodNumber startTime endTime
                     set remarks "Lab block: $labPeriods periods"
                     if {$subjectCode ne ""} {
@@ -330,12 +528,11 @@ proc placeLabBlock {timetableId days periods startSlot labPeriods subjectName su
                         append remarks " | Ends: $endTime"
                     }
                     insertTimetableSlot $timetableId $day $periodNumber "Lab" $startTime $subjectName $facultyName $department $section $room $remarks
+                    set occupied($dayIndex,[expr {$periodIndex + $i}]) 1
                 }
-                return [expr {$slot + $labPeriods}]
+                return $dayIndex
             }
         }
-
-        set slot [expr {($dayIndex + 1) * $periodsPerDay}]
     }
 
     return -1
@@ -344,7 +541,7 @@ proc placeLabBlock {timetableId days periods startSlot labPeriods subjectName su
 proc loadTimetableClassrooms {dept} {
     global db
     set classrooms {}
-    set sql "SELECT room_number, name FROM classrooms WHERE department = [sqlQuote $dept] OR department IS NULL OR trim(department) = '' ORDER BY room_number"
+    set sql "SELECT room_number, name FROM classrooms WHERE [departmentMatchSql department $dept] OR department IS NULL OR trim(department) = '' ORDER BY room_number"
     db eval $sql row {
         if {$row(name) eq ""} {
             lappend classrooms $row(room_number)
@@ -417,7 +614,29 @@ proc timeToMinutes {timeValue} {
     if {![regexp {^([0-9][0-9]?):([0-9][0-9])$} $timeValue -> hour minute]} {
         return -1
     }
+    set rawHour $hour
+    scan $hour %d hour
+    scan $minute %d minute
+    if {[string length $rawHour] == 1 && $hour >= 1 && $hour <= 4} {
+        incr hour 12
+    }
+    if {$hour < 0 || $hour > 23 || $minute < 0 || $minute > 59} {
+        return -1
+    }
     return [expr {$hour * 60 + $minute}]
+}
+
+proc timetableDisplayTime {timeValue} {
+    if {![regexp {^([0-9][0-9]?):([0-9][0-9])$} $timeValue -> hour minute]} {
+        return $timeValue
+    }
+
+    scan $hour %d hour
+    scan $minute %d minute
+    if {$hour > 12} {
+        set hour [expr {$hour - 12}]
+    }
+    return [format "%d:%02d" $hour $minute]
 }
 
 proc createTimetableRecord {sem year dept section notes} {
@@ -460,18 +679,320 @@ proc insertBreakSlots {timetableId year days} {
     }
 }
 
+proc timetableDaySortValue {day} {
+    switch -- $day {
+        Monday { return 1 }
+        Tuesday { return 2 }
+        Wednesday { return 3 }
+        Thursday { return 4 }
+        Friday { return 5 }
+        default { return 6 }
+    }
+}
+
+proc compareTimetableDays {left right} {
+    return [expr {[timetableDaySortValue $left] - [timetableDaySortValue $right]}]
+}
+
+proc compareTimetableRows {left right} {
+    set leftDay [timetableDaySortValue [lindex $left 0]]
+    set rightDay [timetableDaySortValue [lindex $right 0]]
+    if {$leftDay != $rightDay} {
+        return [expr {$leftDay - $rightDay}]
+    }
+
+    set leftTime [timeToMinutes [lindex $left 2]]
+    set rightTime [timeToMinutes [lindex $right 2]]
+    if {$leftTime < 0} { set leftTime 99999 }
+    if {$rightTime < 0} { set rightTime 99999 }
+    if {$leftTime != $rightTime} {
+        return [expr {$leftTime - $rightTime}]
+    }
+
+    return [expr {[lindex $left 1] - [lindex $right 1]}]
+}
+
+proc timetableRepeat {text count} {
+    set result ""
+    for {set i 0} {$i < $count} {incr i} {
+        append result $text
+    }
+    return $result
+}
+
+proc timetablePad {text width} {
+    set text [string range $text 0 [expr {$width - 1}]]
+    set padding [expr {$width - [string length $text]}]
+    return "$text[timetableRepeat " " $padding]"
+}
+
+proc timetableBorder {leftWidth colWidth colCount} {
+    set line "+"
+    append line [timetableRepeat "-" [expr {$leftWidth + 2}]] "+"
+    for {set i 0} {$i < $colCount} {incr i} {
+        append line [timetableRepeat "-" [expr {$colWidth + 2}]] "+"
+    }
+    return "$line\n"
+}
+
+proc timetableWrapText {text width} {
+    set text [string trim [string map [list "\r" " " "\n" " "] $text]]
+    if {$text eq ""} {
+        return [list ""]
+    }
+
+    set lines {}
+    set current ""
+    foreach word [split $text " "] {
+        if {$word eq ""} {
+            continue
+        }
+        while {[string length $word] > $width} {
+            if {$current ne ""} {
+                lappend lines $current
+                set current ""
+            }
+            lappend lines [string range $word 0 [expr {$width - 1}]]
+            set word [string range $word $width end]
+        }
+        if {$word eq ""} {
+            continue
+        }
+        if {$current eq ""} {
+            set current $word
+        } elseif {[string length "$current $word"] <= $width} {
+            append current " $word"
+        } else {
+            lappend lines $current
+            set current $word
+        }
+    }
+    if {$current ne ""} {
+        lappend lines $current
+    }
+    if {[llength $lines] == 0} {
+        return [list ""]
+    }
+    return $lines
+}
+
+proc clearTimetableResult {} {
+    if {![winfo exists .timetable.result.table]} {
+        return
+    }
+    foreach child [winfo children .timetable.result.table] {
+        destroy $child
+    }
+    if {[winfo exists .timetable.result.canvas]} {
+        .timetable.result.canvas configure -scrollregion [.timetable.result.canvas bbox all]
+    }
+}
+
+proc addTimetableLabel {row column text args} {
+    set widget ".timetable.result.table.r${row}c${column}"
+    if {[winfo exists $widget]} {
+        destroy $widget
+    }
+
+    set options [list -text $text -bg white -fg "#222222" -font {Arial 10} -justify center -anchor center -wraplength 130 -padx 6 -pady 6 -relief solid -bd 1]
+    foreach {key value} $args {
+        lappend options $key $value
+    }
+    label $widget {*}$options
+    grid $widget -row $row -column $column -sticky nsew
+    grid columnconfigure .timetable.result.table $column -minsize 145
+}
+
+proc addTimetableMessage {message} {
+    clearTimetableResult
+    addTimetableLabel 0 0 $message -font {Arial 11} -relief flat -wraplength 600 -anchor w -justify left
+}
+
+proc timetableSlotEndTime {startTime slotType remarks} {
+    if {[string equal -nocase $slotType "Break"] && [regexp {^[0-9][0-9]?:[0-9][0-9][[:space:]]*-[[:space:]]*([0-9][0-9]?:[0-9][0-9])} $remarks -> endTime]} {
+        return $endTime
+    }
+    if {[regexp {Ends:[[:space:]]*([0-9][0-9]?:[0-9][0-9])} $remarks -> endTime]} {
+        return $endTime
+    }
+    return ""
+}
+
+proc timetableColumnLabel {startTime endTime} {
+    if {$endTime eq ""} {
+        return [timetableDisplayTime $startTime]
+    }
+    return "[timetableDisplayTime $startTime]-[timetableDisplayTime $endTime]"
+}
+
+proc timetableCellText {slotType subject staff classroom remarks} {
+    if {[string equal -nocase $slotType "Break"]} {
+        return [string toupper $subject]
+    }
+
+    set text $subject
+    if {[string equal -nocase $slotType "Lab"] && $classroom ne ""} {
+        append text " ($classroom)"
+    }
+    return $text
+}
+
+proc loadTimetableDisplayBreaks {year} {
+    global db
+    set breaks {}
+    set escYear [string map {"'" "''"} $year]
+    set sql "SELECT break_name, start_time, end_time FROM breaktimes WHERE year = '$escYear' AND start_time IS NOT NULL AND end_time IS NOT NULL ORDER BY start_time"
+    db eval $sql row {
+        set startMinutes [timeToMinutes $row(start_time)]
+        set endMinutes [timeToMinutes $row(end_time)]
+        if {$startMinutes >= 0 && $endMinutes >= 0} {
+            lappend breaks [list $row(break_name) $row(start_time) $row(end_time)]
+        }
+    }
+    return $breaks
+}
+
 proc showGeneratedTimetable {timetableId} {
     global db
-    if {![winfo exists .timetable.result.txt]} {
+    if {![winfo exists .timetable.result.table]} {
         return
     }
 
-    .timetable.result.txt delete 1.0 end
-    .timetable.result.txt insert end "Day        Period  Time   Type   Subject / Break                 Faculty            Department       Section  Classroom        Remarks\n"
-    .timetable.result.txt insert end "---------------------------------------------------------------------------------------------------------------------------------\n"
+    clearTimetableResult
 
+    set semester ""
+    set year ""
+    set department ""
+    set section ""
+    db eval "SELECT semester, year, department, section FROM timetables WHERE timetable_id = $timetableId" info {
+        set semester $info(semester)
+        set year $info(year)
+        set department $info(department)
+        set section $info(section)
+    }
+
+    set rows {}
     set sql "SELECT day_of_week, period_number, start_time, slot_type, subject_name, staff_name, department, section, classroom, remarks FROM timetable_slots WHERE timetable_id = $timetableId ORDER BY CASE day_of_week WHEN 'Monday' THEN 1 WHEN 'Tuesday' THEN 2 WHEN 'Wednesday' THEN 3 WHEN 'Thursday' THEN 4 WHEN 'Friday' THEN 5 ELSE 6 END, period_number, start_time"
     db eval $sql row {
-        .timetable.result.txt insert end "[format {%-10s %-7s %-6s %-6s %-31s %-18s %-16s %-8s %-16s %s} $row(day_of_week) $row(period_number) $row(start_time) $row(slot_type) $row(subject_name) $row(staff_name) $row(department) $row(section) $row(classroom) $row(remarks)]\n"
+        lappend rows [list $row(day_of_week) $row(period_number) $row(start_time) $row(slot_type) $row(subject_name) $row(staff_name) $row(department) $row(section) $row(classroom) $row(remarks)]
+    }
+
+    if {[llength $rows] == 0} {
+        addTimetableMessage "No timetable slots found."
+        return
+    }
+
+    set columns {}
+    set days {}
+    array unset cells
+
+    foreach periodData [loadTimetablePeriods $year] {
+        lassign $periodData periodNumber start end
+        set startMinutes [timeToMinutes $start]
+        set endMinutes [timeToMinutes $end]
+        if {$startMinutes < 0} {
+            continue
+        }
+        if {$endMinutes < 0} {
+            set endMinutes $startMinutes
+        }
+        set label [timetableColumnLabel $start $end]
+        set key "$startMinutes|$endMinutes|$label"
+        lappend columns [list $startMinutes $endMinutes $key $label "Period" ""]
+    }
+
+    foreach breakData [loadTimetableDisplayBreaks $year] {
+        lassign $breakData breakName start end
+        set startMinutes [timeToMinutes $start]
+        set endMinutes [timeToMinutes $end]
+        if {$startMinutes < 0} {
+            continue
+        }
+        if {$endMinutes < 0} {
+            set endMinutes $startMinutes
+        }
+        set label [timetableColumnLabel $start $end]
+        set key "$startMinutes|$endMinutes|$label"
+        lappend columns [list $startMinutes $endMinutes $key $label "Break" $breakName]
+    }
+
+    foreach slotRow $rows {
+        lassign $slotRow day period start type subject staff rowDept rowSection classroom remarks
+        if {[lsearch -exact $days $day] < 0} {
+            lappend days $day
+        }
+        if {[string equal -nocase $type "Break"]} {
+            continue
+        }
+
+        set end [timetableSlotEndTime $start $type $remarks]
+        set startMinutes [timeToMinutes $start]
+        set endMinutes [timeToMinutes $end]
+        if {$startMinutes < 0} {
+            set startMinutes 99999
+        }
+        if {$endMinutes < 0} {
+            set endMinutes $startMinutes
+        }
+
+        set label [timetableColumnLabel $start $end]
+        set key "$startMinutes|$endMinutes|$label"
+        set cellText [timetableCellText $type $subject $staff $classroom $remarks]
+        if {[info exists cells($day,$key)] && $cells($day,$key) ne ""} {
+            append cells($day,$key) " / $cellText"
+        } else {
+            set cells($day,$key) $cellText
+        }
+    }
+
+    set columns [lsort -integer -index 0 $columns]
+    set days [lsort -command compareTimetableDays $days]
+
+    set firstRoom ""
+    foreach slotRow $rows {
+        if {[lindex $slotRow 8] ne ""} {
+            set firstRoom [lindex $slotRow 8]
+            break
+        }
+    }
+
+    set heading "Year: $year | Semester: $semester | Department: $department | Section: $section"
+    if {$firstRoom ne ""} {
+        append heading " | Class Room: $firstRoom"
+    }
+    addTimetableLabel 0 0 $heading -font {Arial 11 bold} -relief flat -anchor w -justify left -wraplength 900
+    grid .timetable.result.table.r0c0 -columnspan [expr {[llength $columns] + 1}] -sticky ew
+    grid columnconfigure .timetable.result.table 0 -minsize 120
+
+    set colIndex 1
+    foreach column $columns {
+        addTimetableLabel 1 $colIndex [lindex $column 3] -bg "#1565C0" -fg white -font {Arial 10 bold}
+        incr colIndex
+    }
+    addTimetableLabel 1 0 "Day/Time" -bg "#1565C0" -fg white -font {Arial 10 bold}
+
+    set rowIndex 2
+    foreach day $days {
+        addTimetableLabel $rowIndex 0 $day -bg "#E3F2FD" -font {Arial 10 bold}
+        set colIndex 1
+        foreach column $columns {
+            set key [lindex $column 2]
+            set columnType [lindex $column 4]
+            set breakName [lindex $column 5]
+            if {[string equal -nocase $columnType "Break"]} {
+                addTimetableLabel $rowIndex $colIndex [string toupper $breakName] -bg "#FFF3E0" -font {Arial 10 bold}
+            } elseif {[info exists cells($day,$key)]} {
+                addTimetableLabel $rowIndex $colIndex $cells($day,$key)
+            } else {
+                addTimetableLabel $rowIndex $colIndex ""
+            }
+            incr colIndex
+        }
+        incr rowIndex
+    }
+
+    if {[winfo exists .timetable.result.canvas]} {
+        update idletasks
+        .timetable.result.canvas configure -scrollregion [.timetable.result.canvas bbox all]
     }
 }

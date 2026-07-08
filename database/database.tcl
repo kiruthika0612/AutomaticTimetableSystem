@@ -17,9 +17,11 @@ proc setupDatabase {} {
             department TEXT,
             designation TEXT,
             email TEXT,
-            phone TEXT
+            phone TEXT,
+            hours_allotted INTEGER
         )
     }
+    ensureColumn faculty hours_allotted INTEGER
 
     db eval {
         CREATE TABLE IF NOT EXISTS subjects (
@@ -46,9 +48,11 @@ proc setupDatabase {} {
             name TEXT,
             building TEXT,
             capacity INTEGER,
-            department TEXT
+            department TEXT,
+            lab_location TEXT
         )
     }
+    ensureColumn classrooms lab_location TEXT
 
     db eval {
         CREATE TABLE IF NOT EXISTS breaktimes (
