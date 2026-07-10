@@ -19,7 +19,9 @@ proc openTimetableGenerator {} {
 
     label .timetable.form.l1 -text "Semester :" -bg white
     grid .timetable.form.l1 -row 0 -column 0 -padx 8 -pady 6 -sticky e
-    entry .timetable.form.e1 -width 8
+    ttk::combobox .timetable.form.e1 \
+        -values {1 2 3 4 5 6 7 8} -width 8 -state readonly
+    .timetable.form.e1 set "1"
     grid .timetable.form.e1 -row 0 -column 1 -padx 8 -sticky w
 
     label .timetable.form.lY -text "Year :" -bg white
@@ -38,6 +40,8 @@ proc openTimetableGenerator {} {
     ttk::combobox .timetable.form.section -values {"A" "B" "C" "D"} -width 8
     .timetable.form.section set "A"
     grid .timetable.form.section -row 3 -column 1 -padx 8 -sticky w
+    bind .timetable.form.dept <<ComboboxSelected>> {refreshTimetableSections}
+    bind .timetable.form.year <<ComboboxSelected>> {refreshTimetableSections}
 
     label .timetable.form.l2 -text "Notes (optional) :" -bg white
     grid .timetable.form.l2 -row 4 -column 0 -padx 8 -pady 6 -sticky e
@@ -79,6 +83,8 @@ proc openTimetableGenerator {} {
 proc generateTimetable {} {
     global db currentTimetableId
     ensureTimetableTables
+
+    if {![requireEditTimetablePermission]} { return }
 
     set sem [.timetable.form.e1 get]
     set year [.timetable.form.year get]
@@ -228,7 +234,7 @@ proc generateTimetable {} {
     foreach item $labTodo {
         lassign $item subjectName subjectCode department credits facultyName subjectType labPeriods
         incr requiredSlots $labPeriods
-        set placed [placeLabBlock $timetableId $days $periods $preferredLabDay $labPeriods $subjectName $subjectCode $facultyName $department $section [lindex $classrooms [expr {$classroomIndex % [llength $classrooms]}]] occupied]
+        set placed [placeLabBlock $timetableId $days $periods $preferredLabDay $labPeriods $subjectName $subjectCode $facultyName $department $section $classrooms occupied]
         if {$placed < 0} {
             incr skippedLabs
             continue
@@ -241,17 +247,16 @@ proc generateTimetable {} {
     set slotOrder [balancedTimetableSlotOrder $days $periods]
     set slotOrderIndex 0
     foreach item $theoryTodo {
-        set nextSlot [nextFreeTimetableSlot $slotOrder slotOrderIndex occupied]
+        set nextSlot [nextCompatibleTimetableSlot $slotOrder slotOrderIndex occupied $days $periods $facultyName $classrooms]
         if {[llength $nextSlot] == 0} {
             break
         }
 
-        lassign $nextSlot dayIndex periodIndex
+        lassign $nextSlot dayIndex periodIndex room
         set day [lindex $days $dayIndex]
         set periodData [lindex $periods $periodIndex]
         lassign $periodData periodNumber startTime endTime
 
-        set room [lindex $classrooms [expr {$classroomIndex % [llength $classrooms]}]]
         lassign $item subjectName subjectCode department credits facultyName
         set remarks ""
         if {$subjectCode ne ""} {
@@ -342,6 +347,7 @@ proc findTimetableToDelete {} {
 
 proc deleteCurrentTimetable {} {
     global db currentTimetableId
+    if {![requireEditTimetablePermission]} { return }
     set timetableId [findTimetableToDelete]
     if {$timetableId eq ""} {
         tk_messageBox -title "Delete" -message "Generate a timetable first, or select the same semester, year, department, and section to delete." -icon info
@@ -428,6 +434,37 @@ proc sqlQuote {value} {
     return "'[string map {"'" "''"} $value]'"
 }
 
+# Refresh the Section dropdown when Department or Year changes
+proc refreshTimetableSections {} {
+    global db
+    if {![winfo exists .timetable.form.section]} { return }
+    set dept [string trim [.timetable.form.dept get]]
+    set year [string trim [.timetable.form.year get]]
+
+    set sections {}
+    if {$dept ne "" && $year ne ""} {
+        set escDept [string map {"'" "''"} $dept]
+        set escYear [string map {"'" "''"} $year]
+        db eval "SELECT DISTINCT section_name FROM sections
+                 WHERE (department = '$escDept'
+                    OR department IN (SELECT department_name FROM departments WHERE short_name = '$escDept')
+                    OR department IN (SELECT short_name FROM departments WHERE department_name = '$escDept'))
+                   AND year = '$escYear'
+                 ORDER BY section_name" row {
+            lappend sections $row(section_name)
+        }
+    }
+    # Always keep A B C D as fallback options
+    foreach s {A B C D} {
+        if {[lsearch -exact $sections $s] < 0} { lappend sections $s }
+    }
+    .timetable.form.section configure -values $sections
+    if {[.timetable.form.section get] eq "" || \
+        [lsearch -exact $sections [.timetable.form.section get]] < 0} {
+        .timetable.form.section set [lindex $sections 0]
+    }
+}
+
 proc loadTimetableDepartments {} {
     global db
     set departments {}
@@ -494,6 +531,37 @@ proc nextFreeTimetableSlot {slotOrder slotOrderIndexVar occupiedVar} {
         if {![info exists occupied($dayIndex,$periodIndex)]} {
             return $slot
         }
+    }
+
+    return {}
+}
+
+# Find the next free slot AND assign a classroom from the pool (round-robin)
+# Returns: {dayIndex periodIndex roomName}  or {} when no slot is available
+proc nextCompatibleTimetableSlot {slotOrder slotOrderIndexVar occupiedVar days periods facultyName classrooms} {
+    upvar $slotOrderIndexVar slotOrderIndex
+    upvar $occupiedVar occupied
+
+    while {$slotOrderIndex < [llength $slotOrder]} {
+        set slot [lindex $slotOrder $slotOrderIndex]
+        incr slotOrderIndex
+        lassign $slot dayIndex periodIndex
+
+        if {[info exists occupied($dayIndex,$periodIndex)]} {
+            continue
+        }
+
+        # Pick a classroom (round-robin based on how many slots are filled)
+        set filledCount 0
+        foreach key [array names occupied] { incr filledCount }
+        set roomCount [llength $classrooms]
+        if {$roomCount > 0} {
+            set room [lindex $classrooms [expr {$filledCount % $roomCount}]]
+        } else {
+            set room ""
+        }
+
+        return [list $dayIndex $periodIndex $room]
     }
 
     return {}

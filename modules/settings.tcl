@@ -51,9 +51,44 @@ proc openSettings {} {
     button .settings.close -text "Close" -width 10 -command {destroy .settings}
     pack .settings.close -in .settings.actions -side left -padx 5
 
-    listbox .settings.list -width 75 -height 14
-    pack .settings.list -fill both -expand 1 -padx 10 -pady 8
-    bind .settings.list <<ListboxSelect>> {loadSelectedPeriod}
+    # ── Treeview ──────────────────────────────────────────────────────────────
+    frame .settings.tblframe -bg white
+    pack  .settings.tblframe -fill both -expand 1 -padx 10 -pady 8
+
+    set cols {PeriodID Year PeriodNo StartTime EndTime}
+    ttk::style configure Settings.Treeview -font {Arial 10} -rowheight 26
+    ttk::style configure Settings.Treeview.Heading \
+        -font {Arial 10 bold} -background "#1565C0" -foreground white
+
+    ttk::treeview .settings.tblframe.tree \
+        -columns $cols -show headings -selectmode browse \
+        -style Settings.Treeview \
+        -yscrollcommand {.settings.tblframe.ys set}
+
+    scrollbar .settings.tblframe.ys -orient vertical \
+        -command {.settings.tblframe.tree yview}
+
+    .settings.tblframe.tree heading PeriodID  -text "ID"
+    .settings.tblframe.tree heading Year      -text "Year"
+    .settings.tblframe.tree heading PeriodNo  -text "Period"
+    .settings.tblframe.tree heading StartTime -text "Start"
+    .settings.tblframe.tree heading EndTime   -text "End"
+
+    .settings.tblframe.tree column PeriodID  -width 50  -anchor center
+    .settings.tblframe.tree column Year      -width 140 -anchor center
+    .settings.tblframe.tree column PeriodNo  -width 70  -anchor center
+    .settings.tblframe.tree column StartTime -width 90  -anchor center
+    .settings.tblframe.tree column EndTime   -width 90  -anchor center
+
+    .settings.tblframe.tree tag configure odd  -background "#F7FBFF"
+    .settings.tblframe.tree tag configure even -background "#EAF3FC"
+
+    bind .settings.tblframe.tree <<TreeviewSelect>> {loadSelectedPeriod}
+
+    grid .settings.tblframe.tree -row 0 -column 0 -sticky nsew
+    grid .settings.tblframe.ys   -row 0 -column 1 -sticky ns
+    grid rowconfigure    .settings.tblframe 0 -weight 1
+    grid columnconfigure .settings.tblframe 0 -weight 1
 
     applyThemeToWindow .settings
     refreshPeriodList
@@ -61,31 +96,41 @@ proc openSettings {} {
 
 proc refreshPeriodList {} {
     global db
-    .settings.list delete 0 end
+    if {![winfo exists .settings.tblframe.tree]} { return }
+    .settings.tblframe.tree delete [.settings.tblframe.tree children {}]
     set year [.settings.form.year get]
     set escYear [string map {"'" "''"} $year]
-    db eval "SELECT period_id, year, period_number, start_time, end_time FROM periods WHERE year = '$escYear' ORDER BY period_number" row {
-        .settings.list insert end "[format {%d | %s | Period %d | %s - %s} $row(period_id) $row(year) $row(period_number) $row(start_time) $row(end_time)]"
+    set rowIdx 0
+    db eval "SELECT period_id, year, period_number, start_time, end_time
+             FROM periods WHERE year = '$escYear' ORDER BY period_number" row {
+        set tag [expr {$rowIdx % 2 == 0 ? "even" : "odd"}]
+        .settings.tblframe.tree insert {} end \
+            -values [list $row(period_id) $row(year) \
+                $row(period_number) $row(start_time) $row(end_time)] \
+            -tags $tag
+        incr rowIdx
     }
 }
 
 proc clearPeriodForm {} {
     .settings.form.period delete 0 end
-    .settings.form.start delete 0 end
-    .settings.form.end delete 0 end
+    .settings.form.start  delete 0 end
+    .settings.form.end    delete 0 end
 }
 
 proc loadSelectedPeriod {} {
-    set sel [.settings.list curselection]
-    if {$sel eq ""} {
-        return
-    }
-    set line [.settings.list get $sel]
-    regexp {^[0-9]+ \| .+ \| Period ([0-9]+) \| ([0-9:]+) - ([0-9:]+)} $line -> period start end
+    if {![winfo exists .settings.tblframe.tree]} { return }
+    set sel [.settings.tblframe.tree selection]
+    if {$sel eq ""} { return }
+    set vals [.settings.tblframe.tree item $sel -values]
+    # values: PeriodID Year PeriodNo StartTime EndTime
+    set period [lindex $vals 2]
+    set start  [lindex $vals 3]
+    set end    [lindex $vals 4]
     clearPeriodForm
     .settings.form.period insert 0 $period
-    .settings.form.start insert 0 $start
-    .settings.form.end insert 0 $end
+    .settings.form.start  insert 0 $start
+    .settings.form.end    insert 0 $end
 }
 
 proc savePeriod {} {
@@ -120,13 +165,13 @@ proc savePeriod {} {
 
 proc deleteSelectedPeriod {} {
     global db
-    set sel [.settings.list curselection]
+    if {![winfo exists .settings.tblframe.tree]} { return }
+    set sel [.settings.tblframe.tree selection]
     if {$sel eq ""} {
         tk_messageBox -title "Delete" -message "Select a period to delete." -icon info
         return
     }
-    set line [.settings.list get $sel]
-    regexp {^([0-9]+) \|} $line -> periodId
+    set periodId [lindex [.settings.tblframe.tree item $sel -values] 0]
     db eval "DELETE FROM periods WHERE period_id = $periodId"
     refreshPeriodList
     clearPeriodForm

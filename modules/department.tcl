@@ -64,8 +64,44 @@ proc openDepartmentManagement {} {
     button .department.forms.sec.update -text "Update Section" -width 16 -command {updateSelectedSection}
     grid .department.forms.sec.update -row 4 -column 1 -pady 8
 
-    listbox .department.list -width 100 -height 14
-    pack .department.list -fill both -expand 1 -padx 10 -pady 8
+    # ── Treeview ──────────────────────────────────────────────────────────────
+    frame .department.tblframe -bg white
+    pack  .department.tblframe -fill both -expand 1 -padx 10 -pady 8
+
+    set cols {RowKey Type Name ShortOrYear Extra}
+    ttk::style configure Dept.Treeview -font {Arial 10} -rowheight 26
+    ttk::style configure Dept.Treeview.Heading \
+        -font {Arial 10 bold} -background "#1565C0" -foreground white
+
+    ttk::treeview .department.tblframe.tree \
+        -columns $cols -show headings -selectmode browse \
+        -style Dept.Treeview \
+        -yscrollcommand {.department.tblframe.ys set} \
+        -xscrollcommand {.department.tblframe.xs set}
+
+    scrollbar .department.tblframe.ys -orient vertical   -command {.department.tblframe.tree yview}
+    scrollbar .department.tblframe.xs -orient horizontal -command {.department.tblframe.tree xview}
+
+    .department.tblframe.tree heading RowKey    -text "ID"
+    .department.tblframe.tree heading Type      -text "Type"
+    .department.tblframe.tree heading Name      -text "Name"
+    .department.tblframe.tree heading ShortOrYear -text "Short / Year"
+    .department.tblframe.tree heading Extra     -text "Description / Section"
+
+    .department.tblframe.tree column RowKey      -width 60  -anchor center
+    .department.tblframe.tree column Type        -width 90  -anchor center
+    .department.tblframe.tree column Name        -width 200 -anchor w
+    .department.tblframe.tree column ShortOrYear -width 120 -anchor center
+    .department.tblframe.tree column Extra       -width 280 -anchor w
+
+    .department.tblframe.tree tag configure dept -background "#EAF3FC"
+    .department.tblframe.tree tag configure sec  -background "#F7FBFF"
+
+    grid .department.tblframe.tree -row 0 -column 0 -sticky nsew
+    grid .department.tblframe.ys   -row 0 -column 1 -sticky ns
+    grid .department.tblframe.xs   -row 1 -column 0 -sticky ew
+    grid rowconfigure    .department.tblframe 0 -weight 1
+    grid columnconfigure .department.tblframe 0 -weight 1
 
     frame .department.actions -bg white
     pack .department.actions -pady 6
@@ -165,17 +201,13 @@ proc addSection {} {
 }
 
 proc selectedDepartmentListItem {} {
-    set sel [.department.list curselection]
-    if {$sel eq ""} {
-        return {}
-    }
-    set line [.department.list get $sel]
-    if {[regexp {^D:([0-9]+)} $line -> id]} {
-        return [list D $id]
-    }
-    if {[regexp {^S:([0-9]+)} $line -> id]} {
-        return [list S $id]
-    }
+    if {![winfo exists .department.tblframe.tree]} { return {} }
+    set sel [.department.tblframe.tree selection]
+    if {$sel eq ""} { return {} }
+    set values [.department.tblframe.tree item $sel -values]
+    set rowKey [lindex $values 0]   ;# e.g. "D:3" or "S:7"
+    if {[regexp {^D:([0-9]+)$} $rowKey -> id]} { return [list D $id] }
+    if {[regexp {^S:([0-9]+)$} $rowKey -> id]} { return [list S $id] }
     return {}
 }
 
@@ -286,15 +318,22 @@ proc updateSelectedSection {} {
 
 proc refreshDepartmentList {} {
     global db
-    .department.list delete 0 end
-    .department.list insert end "DEPARTMENTS"
-    db eval {SELECT department_id, department_name, short_name, description FROM departments ORDER BY department_name} row {
-        .department.list insert end "[format {D:%d | %s | %s | %s} $row(department_id) $row(department_name) $row(short_name) $row(description)]"
+    if {![winfo exists .department.tblframe.tree]} { return }
+    .department.tblframe.tree delete [.department.tblframe.tree children {}]
+
+    db eval {SELECT department_id, department_name, short_name, description
+             FROM departments ORDER BY department_name} row {
+        .department.tblframe.tree insert {} end \
+            -values [list "D:$row(department_id)" "Department" \
+                $row(department_name) $row(short_name) $row(description)] \
+            -tags dept
     }
-    .department.list insert end ""
-    .department.list insert end "SECTIONS"
-    db eval {SELECT section_id, department, year, section_name FROM sections ORDER BY department, year, section_name} row {
-        .department.list insert end "[format {S:%d | %s | %s | Section %s} $row(section_id) $row(department) $row(year) $row(section_name)]"
+    db eval {SELECT section_id, department, year, section_name
+             FROM sections ORDER BY department, year, section_name} row {
+        .department.tblframe.tree insert {} end \
+            -values [list "S:$row(section_id)" "Section" \
+                $row(department) $row(year) "Section $row(section_name)"] \
+            -tags sec
     }
 }
 

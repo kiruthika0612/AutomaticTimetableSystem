@@ -16,6 +16,7 @@ source modules/breaktime_management.tcl
 source modules/settings.tcl
 source modules/leave.tcl
 source modules/timetable.tcl
+source modules/timetable_editor.tcl
 source modules/clash_detection.tcl
 source modules/reports.tcl
 source modules/dashboard.tcl

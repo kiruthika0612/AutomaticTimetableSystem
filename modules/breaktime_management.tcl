@@ -62,10 +62,42 @@ proc openBreaktimeManagement {} {
     button .breaktime.close -text "Close" -command {destroy .breaktime}
     pack .breaktime.close -in .breaktime.actions -side left -padx 6
 
-    frame .breaktime.listf -bg white
-    pack .breaktime.listf -fill both -expand 1 -padx 8 -pady 8
-    listbox .breaktime.list -width 70 -height 8
-    pack .breaktime.list -in .breaktime.listf -fill both -expand 1
+    # ── Treeview ──────────────────────────────────────────────────────────────
+    frame .breaktime.tblframe -bg white
+    pack  .breaktime.tblframe -fill both -expand 1 -padx 8 -pady 8
+
+    set cols {BreakID Year BreakName StartTime EndTime}
+    ttk::style configure Break.Treeview -font {Arial 10} -rowheight 26
+    ttk::style configure Break.Treeview.Heading \
+        -font {Arial 10 bold} -background "#1565C0" -foreground white
+
+    ttk::treeview .breaktime.tblframe.tree \
+        -columns $cols -show headings -selectmode browse \
+        -style Break.Treeview \
+        -yscrollcommand {.breaktime.tblframe.ys set}
+
+    scrollbar .breaktime.tblframe.ys -orient vertical \
+        -command {.breaktime.tblframe.tree yview}
+
+    .breaktime.tblframe.tree heading BreakID   -text "ID"
+    .breaktime.tblframe.tree heading Year      -text "Year"
+    .breaktime.tblframe.tree heading BreakName -text "Break Name"
+    .breaktime.tblframe.tree heading StartTime -text "Start"
+    .breaktime.tblframe.tree heading EndTime   -text "End"
+
+    .breaktime.tblframe.tree column BreakID   -width 50  -anchor center
+    .breaktime.tblframe.tree column Year      -width 120 -anchor center
+    .breaktime.tblframe.tree column BreakName -width 200 -anchor w
+    .breaktime.tblframe.tree column StartTime -width 90  -anchor center
+    .breaktime.tblframe.tree column EndTime   -width 90  -anchor center
+
+    .breaktime.tblframe.tree tag configure odd  -background "#F7FBFF"
+    .breaktime.tblframe.tree tag configure even -background "#FFF3E0"
+
+    grid .breaktime.tblframe.tree -row 0 -column 0 -sticky nsew
+    grid .breaktime.tblframe.ys   -row 0 -column 1 -sticky ns
+    grid rowconfigure    .breaktime.tblframe 0 -weight 1
+    grid columnconfigure .breaktime.tblframe 0 -weight 1
 
     applyThemeToWindow .breaktime
     refreshBreaktimeList
@@ -122,15 +154,10 @@ proc addBreaktime {} {
 }
 
 proc selectedBreakId {} {
-    set selIndex [.breaktime.list curselection]
-    if {$selIndex eq ""} {
-        return ""
-    }
-    set line [.breaktime.list get $selIndex]
-    if {[regexp {^([0-9]+) \|} $line -> bid]} {
-        return $bid
-    }
-    return ""
+    if {![winfo exists .breaktime.tblframe.tree]} { return "" }
+    set sel [.breaktime.tblframe.tree selection]
+    if {$sel eq ""} { return "" }
+    return [lindex [.breaktime.tblframe.tree item $sel -values] 0]
 }
 
 proc editSelectedBreak {} {
@@ -202,29 +229,32 @@ proc validateBreakClockTime {timeValue label} {
 
 proc refreshBreaktimeList {} {
     global db
-    .breaktime.list delete 0 end
+    if {![winfo exists .breaktime.tblframe.tree]} { return }
+    .breaktime.tblframe.tree delete [.breaktime.tblframe.tree children {}]
+
     set year [.breaktime.form.year get]
     if {$year eq ""} {
-        set sql {SELECT break_id, year, break_name, start_time, end_time FROM breaktimes ORDER BY year, start_time}
-        if {[catch {
-            db eval $sql row {
-                .breaktime.list insert end "[format {%d | %s | %s | %s - %s} $row(break_id) $row(year) $row(break_name) $row(start_time) $row(end_time)]"
-            }
-        } err]} {
-            .breaktime.list insert end "Error reading breaktimes: $err"
-            return
-        }
+        set sql {SELECT break_id, year, break_name, start_time, end_time
+                 FROM breaktimes ORDER BY year, start_time}
     } else {
         set escYear [string map {"'" "''"} $year]
-        set sql "SELECT break_id, year, break_name, start_time, end_time FROM breaktimes WHERE year = '$escYear' ORDER BY start_time"
-        if {[catch {
-            db eval $sql row {
-                .breaktime.list insert end "[format {%d | %s | %s | %s - %s} $row(break_id) $row(year) $row(break_name) $row(start_time) $row(end_time)]"
-            }
-        } err]} {
-            .breaktime.list insert end "Error reading breaktimes: $err"
-            return
+        set sql "SELECT break_id, year, break_name, start_time, end_time
+                 FROM breaktimes WHERE year = '$escYear' ORDER BY start_time"
+    }
+
+    set rowIdx 0
+    if {[catch {
+        db eval $sql row {
+            set tag [expr {$rowIdx % 2 == 0 ? "even" : "odd"}]
+            .breaktime.tblframe.tree insert {} end \
+                -values [list $row(break_id) $row(year) \
+                    $row(break_name) $row(start_time) $row(end_time)] \
+                -tags $tag
+            incr rowIdx
         }
+    } err]} {
+        .breaktime.tblframe.tree insert {} end \
+            -values [list "" "" "Error reading breaks: $err" "" ""]
     }
 }
 
@@ -235,11 +265,12 @@ proc deleteSelectedBreak {} {
         tk_messageBox -title "Delete" -message "Select a break to delete." -icon info
         return
     }
-    if {[tk_messageBox -type yesno -icon question -title "Confirm" -message "Delete break ID $bid ?"] ne "yes"} { return }
+    if {[tk_messageBox -type yesno -icon question -title "Confirm" \
+            -message "Delete this break?"] ne "yes"} { return }
     if {[catch {db eval "DELETE FROM breaktimes WHERE break_id = $bid"} err]} {
         tk_messageBox -title "DB Error" -message "Delete failed:\n$err" -icon error
     } else {
-        tk_messageBox -title "Success" -message "Deleted." -icon info
+        clearBreaktimeForm
         refreshBreaktimeList
     }
 }

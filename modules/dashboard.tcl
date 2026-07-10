@@ -75,17 +75,19 @@ proc openDashboard {} {
     pack .menu -in .content -fill both -expand 1
 
     set items {
-        {.cardUsers "User Management" "Create admin and faculty accounts" users "#0F4C81" openUserManagement}
-        {.cardDept "Departments / Sections" "Maintain branches and class sections" department "#F59E0B" openDepartmentManagement}
-        {.cardFaculty "Faculty Management" "Store faculty details and department" faculty "#16A34A" openFacultyManagement}
-        {.cardSubject "Subject Management" "Add theory and 3-period lab subjects" subject "#0F4C81" openSubjectManagement}
-        {.cardRoom "Classroom Management" "Manage rooms, labs and capacity" room "#475569" openClassroomManagement}
-        {.cardBreak "Break Time" "Set year-wise breaks and lunch" break "#F59E0B" openBreaktimeManagement}
-        {.cardPeriod "Period Settings" "Configure year-wise 45 minute periods" settings "#475569" openSettings}
-        {.cardLeave "Faculty Leave" "Record faculty leave details" leave "#16A34A" openLeaveManagement}
-        {.cardTimetable "Generate Timetable" "Create class and lab schedule" timetable "#0F4C81" openTimetableGenerator}
-        {.cardClash "Clash Detection" "Find faculty, room and section clashes" clash "#DC2626" openClashDetection}
-        {.cardReports "Reports" "View and export generated data" reports "#F59E0B" openReports}
+        {.cardUsers    "User Management"         "Create admin and faculty accounts"        users      "#0F4C81" openUserManagement}
+        {.cardDept     "Departments / Sections"  "Maintain branches and class sections"     department "#F59E0B" openDepartmentManagement}
+        {.cardFaculty  "Faculty Management"      "Store faculty details and department"     faculty    "#16A34A" openFacultyManagement}
+        {.cardSubject  "Subject Management"      "Add theory and 3-period lab subjects"     subject    "#0F4C81" openSubjectManagement}
+        {.cardRoom     "Classroom Management"    "Manage rooms, labs and capacity"          room       "#475569" openClassroomManagement}
+        {.cardBreak    "Break Time"              "Set year-wise breaks and lunch"           break      "#F59E0B" openBreaktimeManagement}
+        {.cardPeriod   "Period Settings"         "Configure year-wise 45 minute periods"    settings   "#475569" openSettings}
+        {.cardLeave    "Faculty Leave"           "Record faculty leave details"             leave      "#16A34A" openLeaveManagement}
+        {.cardTimetable "Generate Timetable"     "Create class and lab schedule"            timetable  "#0F4C81" openTimetableGenerator}
+        {.cardEditor   "Timetable Editor"        "Edit, swap and lock timetable slots"      timetable  "#1565C0" openTimetableEditor}
+        {.cardFacHours "Assign Faculty to Hours" "Decide which staff handles each period"   faculty    "#16A34A" openFacultyHourAssignment}
+        {.cardClash    "Clash Detection"         "Find faculty, room and section clashes"   clash      "#DC2626" openClashDetection}
+        {.cardReports  "Reports"                 "View and export generated data"           reports    "#F59E0B" openReports}
     }
 
     set row 0

@@ -38,8 +38,10 @@ proc setupDatabase {} {
     }
     ensureColumn subjects subject_type TEXT
     ensureColumn subjects lab_hours INTEGER
+    ensureColumn subjects weekly_hours INTEGER
     db eval {UPDATE subjects SET subject_type = 'Theory' WHERE subject_type IS NULL OR trim(subject_type) = ''}
     db eval {UPDATE subjects SET lab_hours = 3 WHERE lab_hours IS NULL}
+    db eval {UPDATE subjects SET weekly_hours = credits WHERE weekly_hours IS NULL AND credits IS NOT NULL}
 
     db eval {
         CREATE TABLE IF NOT EXISTS classrooms (
@@ -142,6 +144,12 @@ proc setupDatabase {} {
     ensureColumn timetables department TEXT
     ensureColumn timetables section TEXT
     ensureColumn timetable_slots section TEXT
+    ensureColumn users can_edit_timetable INTEGER
+    db eval {UPDATE users SET can_edit_timetable = 1 WHERE role = 'Admin' AND (can_edit_timetable IS NULL)}
+    db eval {UPDATE users SET can_edit_timetable = 0 WHERE can_edit_timetable IS NULL}
+    ensureColumn timetable_slots modified_by TEXT
+    ensureColumn timetable_slots locked INTEGER
+    db eval {UPDATE timetable_slots SET locked = 0 WHERE locked IS NULL}
 
     set userCount 0
     db eval {SELECT COUNT(*) AS total FROM users} row {
