@@ -8,7 +8,7 @@ proc openTimetableGenerator {} {
     }
     toplevel .timetable
     wm title .timetable "Timetable Generator"
-    wm geometry .timetable "900x560"
+    wm geometry .timetable "900x680"
     .timetable configure -bg white
 
     label .timetable.title -text "GENERATE TIMETABLE" -font {Arial 16 bold} -bg "#1565C0" -fg white
@@ -40,7 +40,7 @@ proc openTimetableGenerator {} {
     ttk::combobox .timetable.form.section -values {"A" "B" "C" "D"} -width 8
     .timetable.form.section set "A"
     grid .timetable.form.section -row 3 -column 1 -padx 8 -sticky w
-    bind .timetable.form.dept <<ComboboxSelected>> {refreshTimetableSections}
+    bind .timetable.form.dept <<ComboboxSelected>> {refreshTimetableSections; previewTimetableSubjects}
     bind .timetable.form.year <<ComboboxSelected>> {refreshTimetableSections}
 
     label .timetable.form.l2 -text "Notes (optional) :" -bg white
@@ -48,11 +48,40 @@ proc openTimetableGenerator {} {
     entry .timetable.form.e2 -width 40
     grid .timetable.form.e2 -row 4 -column 1 -padx 8 -sticky w
 
+    # ── Subject preview ───────────────────────────────────────────────────────
+    label .timetable.form.lPrev -text "Subjects found :" -bg white
+    grid .timetable.form.lPrev -row 5 -column 0 -padx 8 -pady 6 -sticky ne
+
+    frame .timetable.form.prevFrame -bg white
+    grid .timetable.form.prevFrame -row 5 -column 1 -padx 8 -pady 4 -sticky w
+
+    button .timetable.form.previewBtn -text "Preview Subjects" -width 16 \
+        -bg "#37474F" -fg white -font {Arial 9 bold} \
+        -command {previewTimetableSubjects}
+    grid .timetable.form.previewBtn -row 6 -column 1 -padx 8 -pady 4 -sticky w
+
+    text .timetable.form.prevText -width 50 -height 6 \
+        -font {Arial 9} -bg "#F5F5F5" -relief solid -bd 1 \
+        -state disabled -wrap word
+    grid .timetable.form.prevText -row 7 -column 1 -padx 8 -pady 2 -sticky w
+
+    # Refresh preview when dept/sem/year changes
+    bind .timetable.form.dept <<ComboboxSelected>> {refreshTimetableSections; previewTimetableSubjects}
+    bind .timetable.form.e1  <<ComboboxSelected>> {previewTimetableSubjects}
+
     frame .timetable.actions -bg white
     pack .timetable.actions -pady 12
 
-    button .timetable.generate -text "Generate" -width 14 -command {generateTimetable}
+    button .timetable.generate -text "Auto Generate" -width 14 -command {generateTimetable}
     pack .timetable.generate -in .timetable.actions -side left -padx 8
+    button .timetable.manual -text "Plan Manually" -width 14 \
+        -bg "#2E7D32" -fg white -font {Arial 10 bold} \
+        -command {openManualPlanner}
+    pack .timetable.manual -in .timetable.actions -side left -padx 8
+    button .timetable.setbreaks -text "Set Break Times" -width 16 \
+        -bg "#E65100" -fg white -font {Arial 10 bold} \
+        -command {openInlineBreakSetter}
+    pack .timetable.setbreaks -in .timetable.actions -side left -padx 8
     button .timetable.delete -text "Delete Timetable" -width 16 -command {deleteCurrentTimetable}
     pack .timetable.delete -in .timetable.actions -side left -padx 8
     button .timetable.close -text "Close" -command {destroy .timetable}
@@ -78,6 +107,50 @@ proc openTimetableGenerator {} {
     grid columnconfigure .timetable.result 0 -weight 1
 
     applyThemeToWindow .timetable
+}
+
+proc previewTimetableSubjects {} {
+    if {![winfo exists .timetable.form.prevText]} { return }
+
+    set sem  [string trim [.timetable.form.e1   get]]
+    set dept [string trim [.timetable.form.dept get]]
+
+    set widget .timetable.form.prevText
+    $widget configure -state normal
+    $widget delete 1.0 end
+
+    if {$sem eq "" || $dept eq ""} {
+        $widget insert end "Select Semester and Department to preview subjects."
+        $widget configure -state disabled
+        return
+    }
+    if {![string is integer -strict $sem]} {
+        $widget configure -state disabled
+        return
+    }
+
+    set subjects [loadTimetableSubjects $sem $dept]
+
+    if {[llength $subjects] == 0} {
+        $widget insert end "No subjects found for '$dept' Semester $sem.\n\nCheck that:\n  - Subject department matches exactly\n  - Semester number is correct"
+        $widget configure -state disabled -fg "#C62828"
+        return
+    }
+
+    $widget configure -fg "#111111"
+    set theoryCount 0
+    set labCount    0
+    foreach subj $subjects {
+        lassign $subj sName sCode sDept sCredits sFac sType sLabP _ _
+        set typeTag [expr {[string equal -nocase $sType "Lab"] ? "(Lab $sLabP hrs)" : \
+                          ([string equal -nocase $sType "Blended"] ? "(Blended Cr:$sCredits Lab:$sLabP)" : \
+                          "(Theory Cr:$sCredits)")}]
+        set facLabel [expr {$sFac ne "" && $sFac ne "Not Assigned" ? $sFac : "-- No Faculty --"}]
+        $widget insert end "* $sName  $typeTag  |  $facLabel\n"
+        if {[string equal -nocase $sType "Lab"]} { incr labCount } else { incr theoryCount }
+    }
+    $widget insert end "\nTotal: [llength $subjects] subject(s)  --  Theory: $theoryCount  Lab/Blended: $labCount"
+    $widget configure -state disabled
 }
 
 proc generateTimetable {} {
@@ -361,6 +434,8 @@ proc deleteCurrentTimetable {} {
     if {[catch {
         db eval "DELETE FROM timetable_slots WHERE timetable_id = $timetableId"
         db eval "DELETE FROM timetables WHERE timetable_id = $timetableId"
+        resetTableSequence timetable_slots slot_id
+        resetTableSequence timetables      timetable_id
     } err]} {
         tk_messageBox -title "Database Error" -message "Could not delete timetable:\n$err" -icon error
         return
@@ -670,7 +745,13 @@ proc periodOverlapsBreak {periodStart periodEnd breaks} {
         if {$bs < 0 || $be < 0} {
             continue
         }
-        if {$ps < $be && $pe > $bs} {
+        # Strict overlap only — touching boundaries (pe==bs or ps==be) is NOT an overlap
+        # A period is only removed if it actually falls INSIDE the break window
+        if {$ps < $be && $pe > $bs && $ps >= $bs && $pe <= $be} {
+            return 1
+        }
+        # Also remove if the period START is inside the break
+        if {$ps > $bs && $ps < $be} {
             return 1
         }
     }
@@ -682,12 +763,8 @@ proc timeToMinutes {timeValue} {
     if {![regexp {^([0-9][0-9]?):([0-9][0-9])$} $timeValue -> hour minute]} {
         return -1
     }
-    set rawHour $hour
     scan $hour %d hour
     scan $minute %d minute
-    if {[string length $rawHour] == 1 && $hour >= 1 && $hour <= 4} {
-        incr hour 12
-    }
     if {$hour < 0 || $hour > 23 || $minute < 0 || $minute > 59} {
         return -1
     }
@@ -695,16 +772,8 @@ proc timeToMinutes {timeValue} {
 }
 
 proc timetableDisplayTime {timeValue} {
-    if {![regexp {^([0-9][0-9]?):([0-9][0-9])$} $timeValue -> hour minute]} {
-        return $timeValue
-    }
-
-    scan $hour %d hour
-    scan $minute %d minute
-    if {$hour > 12} {
-        set hour [expr {$hour - 12}]
-    }
-    return [format "%d:%02d" $hour $minute]
+    # Keep 24-hour format as-is — avoids display corruption for afternoon times
+    return $timeValue
 }
 
 proc createTimetableRecord {sem year dept section notes} {
@@ -1063,4 +1132,207 @@ proc showGeneratedTimetable {timetableId} {
         update idletasks
         .timetable.result.canvas configure -scrollregion [.timetable.result.canvas bbox all]
     }
+}
+
+# =============================================================================
+#  Inline Break Time Setter
+#  Opens a small dialog directly from the timetable generator.
+#  Staff can see and edit all 3 breaks for the selected year in one place.
+# =============================================================================
+proc openInlineBreakSetter {} {
+    global db
+
+    set year [string trim [.timetable.form.year get]]
+    if {$year eq ""} {
+        tk_messageBox -title "Select Year" \
+            -message "Please select a Year in the form first." -icon warning
+        return
+    }
+
+    set w .breakSetter
+    if {[winfo exists $w]} { destroy $w }
+    toplevel $w
+    wm title $w "Set Break Times -- $year"
+    wm geometry $w "480x340"
+    wm resizable $w 0 0
+    $w configure -bg white
+    wm transient $w .timetable
+
+    # Header
+    label $w.hdr -text "SET BREAK TIMES -- $year" \
+        -font {Arial 13 bold} -bg "#E65100" -fg white -pady 8
+    pack $w.hdr -fill x
+
+    # Info
+    label $w.info \
+        -text "Enter times in 24-hour HH:MM format  (e.g. 10:45 not 10:45 AM)" \
+        -font {Arial 9} -bg "#FFF3E0" -fg "#BF360C" -anchor w -pady 4
+    pack $w.info -fill x -padx 0
+
+    # Load current break values from DB for this year
+    set escYear [string map {"'" "''"} $year]
+    array unset bsData
+    set bsData(names)  {}
+    set bsData(starts) {}
+    set bsData(ends)   {}
+    set bsData(ids)    {}
+
+    db eval "SELECT break_id, break_name, start_time, end_time
+             FROM breaktimes WHERE year = '$escYear'
+             ORDER BY start_time" bsRow {
+        lappend bsData(ids)    $bsRow(break_id)
+        lappend bsData(names)  $bsRow(break_name)
+        lappend bsData(starts) $bsRow(start_time)
+        lappend bsData(ends)   $bsRow(end_time)
+    }
+
+    # If no breaks exist yet, prefill with defaults
+    if {[llength $bsData(names)] == 0} {
+        set bsData(ids)    {"" "" ""}
+        set bsData(names)  {"BREAK1" "LUNCH" "BREAK2"}
+        set bsData(starts) {"10:45" "12:30" "14:45"}
+        set bsData(ends)   {"11:00" "13:15" "15:00"}
+    }
+
+    # Build rows — one per break
+    frame $w.grid -bg white
+    pack $w.grid -fill x -padx 20 -pady 12
+
+    # Column headers
+    label $w.grid.h0 -text "Break Name" -font {Arial 10 bold} \
+        -bg white -width 14 -anchor w
+    label $w.grid.h1 -text "Start (HH:MM)" -font {Arial 10 bold} \
+        -bg white -width 14 -anchor w
+    label $w.grid.h2 -text "End (HH:MM)" -font {Arial 10 bold} \
+        -bg white -width 14 -anchor w
+    grid $w.grid.h0 -row 0 -column 0 -padx 4 -pady 4 -sticky w
+    grid $w.grid.h1 -row 0 -column 1 -padx 4 -pady 4 -sticky w
+    grid $w.grid.h2 -row 0 -column 2 -padx 4 -pady 4 -sticky w
+
+    set maxRows [llength $bsData(names)]
+    # Always show at least 3 rows
+    if {$maxRows < 3} { set maxRows 3 }
+
+    for {set i 0} {$i < $maxRows} {incr i} {
+        set nm  [lindex $bsData(names)  $i]
+        set st  [lindex $bsData(starts) $i]
+        set en  [lindex $bsData(ends)   $i]
+        if {$nm eq ""} {
+            set nm  [lindex {"BREAK1" "LUNCH" "BREAK2"} $i]
+            set st  [lindex {"10:45"  "12:30" "14:45"} $i]
+            set en  [lindex {"11:00"  "13:15" "15:00"} $i]
+        }
+
+        set r [expr {$i + 1}]
+        entry $w.grid.n$i -width 14 -font {Arial 10}
+        entry $w.grid.s$i -width 14 -font {Arial 10}
+        entry $w.grid.e$i -width 14 -font {Arial 10}
+
+        $w.grid.n$i insert 0 $nm
+        $w.grid.s$i insert 0 $st
+        $w.grid.e$i insert 0 $en
+
+        grid $w.grid.n$i -row $r -column 0 -padx 4 -pady 4
+        grid $w.grid.s$i -row $r -column 1 -padx 4 -pady 4
+        grid $w.grid.e$i -row $r -column 2 -padx 4 -pady 4
+    }
+
+    # Status
+    label $w.status -text "" -fg "#C62828" -bg white \
+        -font {Arial 9} -anchor w -wraplength 440
+    pack $w.status -padx 20 -anchor w
+
+    # Buttons
+    frame $w.btns -bg white
+    pack $w.btns -pady 10
+
+    button $w.btns.save -text "Save Break Times" -width 18 \
+        -bg "#1565C0" -fg white -font {Arial 10 bold} \
+        -command [list saveInlineBreaks $w $year $maxRows]
+    button $w.btns.reset -text "Reset to Defaults" -width 16 \
+        -command [list resetInlineBreakFields $w]
+    button $w.btns.cancel -text "Cancel" -width 10 \
+        -command [list destroy $w]
+
+    pack $w.btns.save   -side left -padx 6
+    pack $w.btns.reset  -side left -padx 6
+    pack $w.btns.cancel -side left -padx 6
+
+    applyThemeToWindow $w
+}
+
+# ── Reset fields to default values ───────────────────────────────────────────
+proc resetInlineBreakFields {w} {
+    set defaults {
+        {BREAK1 10:45 11:00}
+        {LUNCH  12:30 13:15}
+        {BREAK2 14:45 15:00}
+    }
+    for {set i 0} {$i < 3} {incr i} {
+        set def [lindex $defaults $i]
+        $w.grid.n$i delete 0 end ; $w.grid.n$i insert 0 [lindex $def 0]
+        $w.grid.s$i delete 0 end ; $w.grid.s$i insert 0 [lindex $def 1]
+        $w.grid.e$i delete 0 end ; $w.grid.e$i insert 0 [lindex $def 2]
+    }
+    $w.status configure -text "Fields reset to defaults. Click Save to apply."
+}
+
+# ── Validate and save all break rows ─────────────────────────────────────────
+proc saveInlineBreaks {w year maxRows} {
+    global db
+
+    set escYear [string map {"'" "''"} $year]
+    set rows {}
+
+    for {set i 0} {$i < $maxRows} {incr i} {
+        set nm [string trim [$w.grid.n$i get]]
+        set st [string trim [$w.grid.s$i get]]
+        set en [string trim [$w.grid.e$i get]]
+
+        # Skip completely blank rows
+        if {$nm eq "" && $st eq "" && $en eq ""} { continue }
+
+        if {$nm eq ""} {
+            $w.status configure -text "Row [expr {$i+1}]: Break name cannot be empty."
+            return
+        }
+
+        # Validate HH:MM 24-hour format
+        foreach {val lbl} [list $st "Start" $en "End"] {
+            if {![regexp {^([0-1][0-9]|2[0-3]):[0-5][0-9]$} $val]} {
+                $w.status configure \
+                    -text "Row [expr {$i+1}] $lbl time '$val' is invalid. Use HH:MM 24-hour format (e.g. 13:15)."
+                return
+            }
+        }
+
+        lappend rows [list $nm $st $en]
+    }
+
+    if {[llength $rows] == 0} {
+        $w.status configure -text "No break rows to save."
+        return
+    }
+
+    if {[catch {
+        # Delete existing breaks for this year and re-insert
+        db eval "DELETE FROM breaktimes WHERE year = '$escYear'"
+        foreach rowData $rows {
+            lassign $rowData nm st en
+            set escNm [string map {"'" "''"} $nm]
+            set escSt [string map {"'" "''"} $st]
+            set escEn [string map {"'" "''"} $en]
+            db eval "INSERT INTO breaktimes (year, break_name, start_time, end_time)
+                     VALUES ('$escYear','$escNm','$escSt','$escEn')"
+        }
+        resetTableSequence breaktimes break_id
+    } err]} {
+        $w.status configure -text "DB Error: $err"
+        return
+    }
+
+    destroy $w
+    tk_messageBox -title "Saved" \
+        -message "Break times saved for $year:\n[join [lmap r $rows {lindex $r 0}] {, }]\n\nYou can now generate the timetable." \
+        -icon info
 }

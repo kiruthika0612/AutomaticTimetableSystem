@@ -59,6 +59,9 @@ proc openBreaktimeManagement {} {
     pack .breaktime.refresh -in .breaktime.actions -side left -padx 6
     button .breaktime.delete -text "Delete Selected" -width 14 -command {deleteSelectedBreak}
     pack .breaktime.delete -in .breaktime.actions -side left -padx 6
+    button .breaktime.reset -text "Reset Default Breaks" -width 18 -bg "#E53935" -fg white \
+        -command {resetDefaultBreaks}
+    pack .breaktime.reset -in .breaktime.actions -side left -padx 6
     button .breaktime.close -text "Close" -command {destroy .breaktime}
     pack .breaktime.close -in .breaktime.actions -side left -padx 6
 
@@ -270,7 +273,48 @@ proc deleteSelectedBreak {} {
     if {[catch {db eval "DELETE FROM breaktimes WHERE break_id = $bid"} err]} {
         tk_messageBox -title "DB Error" -message "Delete failed:\n$err" -icon error
     } else {
+        resetTableSequence breaktimes break_id
         clearBreaktimeForm
         refreshBreaktimeList
     }
+}
+
+# =============================================================================
+#  Reset Default Breaks — fixes wrong times stored in DB
+#  Correct schedule (24-hour):
+#    BREAK1  10:45 - 11:00
+#    LUNCH   12:30 - 13:15
+#    BREAK2  14:45 - 15:00
+# =============================================================================
+proc resetDefaultBreaks {} {
+    global db
+    set year [string trim [.breaktime.form.year get]]
+    if {$year eq ""} {
+        tk_messageBox -title "Select Year" \
+            -message "Please select a Year first." -icon warning
+        return
+    }
+
+    set ans [tk_messageBox -title "Reset Breaks" \
+        -message "This will DELETE all existing breaks for '$year' and replace them with:\n\n  BREAK1   10:45 - 11:00\n  LUNCH    12:30 - 13:15\n  BREAK2   14:45 - 15:00\n\nContinue?" \
+        -type yesno -icon question]
+    if {$ans ne "yes"} { return }
+
+    set escYear [string map {"'" "''"} $year]
+
+    if {[catch {
+        db eval "DELETE FROM breaktimes WHERE year = '$escYear'"
+        db eval "INSERT INTO breaktimes (year, break_name, start_time, end_time) VALUES
+            ('$escYear', 'BREAK1', '10:45', '11:00'),
+            ('$escYear', 'LUNCH',  '12:30', '13:15'),
+            ('$escYear', 'BREAK2', '14:45', '15:00')"
+        resetTableSequence breaktimes break_id
+    } err]} {
+        tk_messageBox -title "Error" -message "Could not reset breaks:\n$err" -icon error
+        return
+    }
+
+    tk_messageBox -title "Done" \
+        -message "Default breaks set for $year." -icon info
+    refreshBreaktimeList
 }

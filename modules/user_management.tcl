@@ -296,5 +296,6 @@ proc deleteSelectedUser {} {
         tk_messageBox -title "Database Error" -message "Could not delete user:\n$err" -icon error
         return
     }
+    resetTableSequence users id
     refreshUserList
 }

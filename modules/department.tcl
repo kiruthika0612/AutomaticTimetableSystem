@@ -347,8 +347,10 @@ proc deleteSelectedDepartmentItem {} {
     lassign $item type id
     if {$type eq "D"} {
         db eval "DELETE FROM departments WHERE department_id = $id"
+        resetTableSequence departments department_id
     } elseif {$type eq "S"} {
         db eval "DELETE FROM sections WHERE section_id = $id"
+        resetTableSequence sections section_id
     } else {
         return
     }

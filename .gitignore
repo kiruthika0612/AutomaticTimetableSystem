@@ -25,6 +25,18 @@ Thumbs.db
 *.7z
 
 # -----------------------------
-# Tcl/Tk compiled files (if any)
+# Tcl/Tk compiled files
 # -----------------------------
 *.tbc
+
+# -----------------------------
+# Ignore FreeWrap build tool
+# -----------------------------
+freewrap.exe
+docs/
+
+# -----------------------------
+# Optional backup files
+# -----------------------------
+*.old
+*.orig

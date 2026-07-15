@@ -173,6 +173,7 @@ proc deleteSelectedPeriod {} {
     }
     set periodId [lindex [.settings.tblframe.tree item $sel -values] 0]
     db eval "DELETE FROM periods WHERE period_id = $periodId"
+    resetTableSequence periods period_id
     refreshPeriodList
     clearPeriodForm
 }

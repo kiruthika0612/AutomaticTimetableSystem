@@ -281,6 +281,7 @@ proc deleteSelectedClassroom {} {
             -message "Could not delete classroom:\n$err" -icon error
         return
     }
+    resetTableSequence classrooms classroom_id
     refreshClassroomList
 }
 

@@ -427,6 +427,7 @@ proc deleteSelectedSubject {} {
             -message "Could not delete subject:\n$err" -icon error
         return
     }
+    resetTableSequence subjects subject_id
     refreshSubjectList
 }
 

@@ -233,6 +233,7 @@ proc deleteSelectedLeave {} {
     if {$confirm ne "yes"} { return }
 
     db eval "DELETE FROM leaves WHERE leave_id = $lid"
+    resetTableSequence leaves leave_id
     refreshLeaveList
 }
 

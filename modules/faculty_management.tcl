@@ -222,6 +222,7 @@ proc deleteSelectedFaculty {} {
         tk_messageBox -title "Database Error" -message "Could not delete:\n$err" -icon error
         return
     }
+    resetTableSequence faculty faculty_id
     refreshFacultyList
 }
 
